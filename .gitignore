@@ -1,0 +1,66 @@
+# =========================
+# Python
+# =========================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Generated images (if you want to include specific images for your README, remove them from here or put them in a separate docs/ folder)
+output.png
+output_final.png
+
+# =========================
+# Unity
+# =========================
+# This ignores Unity generated folders no matter where they are in the project
+**/[Ll]ibrary/
+**/[Tt]emp/
+**/[Oo]bj/
+**/[Bb]uild/
+**/[Bb]uilds/
+**/[Ll]ogs/
+**/[Uu]ser[Ss]ettings/
+
+# MemoryCaptures can get excessive in size.
+**/MemoryCaptures/
+
+# Asset meta data should only be ignored when the asset itself is not tracked
+**/*.pidb.meta
+**/*.pdb.meta
+**/*.mdb.meta
+
+# Visual Studio / Rider / IDEs
+**/.vs/
+**/.idea/
+**/.consulo/
+**/*.csproj
+**/*.unityproj
+**/*.sln
+**/*.suo
+**/*.tmp
+**/*.user
+**/*.userprefs
+**/*.pidb
+**/*.boop
+**/*.svd
+**/*.pdb
+**/*.mdb
+**/*.opendb
+**/*.VC.db
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

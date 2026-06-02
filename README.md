@@ -1,0 +1,40 @@
+# Real-time AI Neural Rendering System
+
+## 概要 (Overview)
+既存の3D空間の映像を、AIを用いてより質感のある映像にリアルタイムで変換するシステムです。
+Unity内の3Dレンダリング映像をPython側に送信し、生成AI技術を用いて画像を高品質化し、即座にUnityへ送り返すパイプラインを目指しました。
+
+## デモ (Demo)
+[デモ動画](https://youtu.be/PIlJGV8Vlp0)
+
+## システム構成 (Architecture)
+* **フロントエンド (3D環境・描画):** Unity (C#)
+* **バックエンド (AI推論):** Python, StreamDiffusion
+* **推論最適化:** TensorRT, CUDA
+* **通信プロトコル:** UDPソケット通信 (ローカルネットワーク)
+
+## 主要な機能 (Features)
+* **プロセス間リアルタイム同期:** 映像データの送受信において、リアルタイム性を最優先するためTCPではなくUDP通信を採用し、低遅延なストリーミングを目指しました。
+* **AI推論の極限高速化:** StreamDiffusionを採用し、さらにTensorRTを用いてモデルの最適化を行うことで、GPUの計算リソースを極限まで引き出し、リアルタイムAIレンダリングを目指しました。
+* **バッファ滞留（遅延）の防止:** 通信や推論のタイムラグによって古いフレームがキューに溜まるのを防ぐため、常に最新のフレームのみを処理し、古いものは破棄する独自の処理フローを実装しました。
+
+## 動作環境 (Requirements)
+* **OS:** Windows 10 / 11
+* **GPU:** NVIDIA RTX 5070 (またはそれ以上のVRAMと性能を持つGPU)
+* **Python:** 3.10.x (※お使いのバージョンに合わせてください)
+* **Unity:** 2022.3 LTS (※お使いのバージョンに合わせてください)
+
+### 重要なライブラリのバージョン（競合回避のため固定）
+* `tensorrt` == 8.6.1
+* `cuda-python` == 12.2.0
+* `polygraphy` == 0.48.1
+
+## 環境構築 (Installation)
+
+### 1. Pythonバックエンドのセットアップ
+仮想環境を作成し、必要なパッケージをインストールします。
+```bash
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```

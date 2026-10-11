@@ -24,7 +24,8 @@ wrapper = StreamDiffusionWrapper(
     mode="img2img",
     use_tiny_vae=True,
     device="cuda",
-    dtype=torch.float16
+    dtype=torch.float16,
+    acceleration="none",
 )
 
 wrapper.prepare(

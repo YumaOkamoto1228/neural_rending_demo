@@ -7,3 +7,10 @@ accelerate==0.29.0
 numpy==1.26.4
 opencv-python==4.10.0.84
 pillow
+# TensorRT高速化 (RTX 50シリーズはTensorRT 10.8以降が必要)
+tensorrt-cu12==10.16.1.11
+polygraphy==0.53.6
+cuda-python>=12.8,<13
+onnx==1.23.2
+onnx-graphsurgeon==0.6.1
+onnxruntime==1.23.2

@@ -106,6 +106,69 @@ class NoiseWarper:
         self.stream.init_noise = noise
 
 
+class LatentFeedback:
+    """前のフレームでAIが描いた結果を、モーションベクトルで今の位置にずらし、今のフレームの描き始めに混ぜる。
+
+    StreamDiffusionは毎フレーム入力画像から描き直すため、模様がフレームごとに作り直されて流れるように変わる。
+    前の結果(潜在空間)を入力の潜在表現に混ぜることで、前に描いた模様を引き継ぎつつ変わった部分だけを描き直させる。
+
+    source_index: 引き継ぐ結果。StreamDiffusionは複数フレームを段階ごとに並行処理しており、
+        前回の処理結果のうち source_index 番目は (source_index+1) フレーム前のフレームの、
+        (source_index+1) 段階目まで描いた結果になる。0が最も新しく、大きいほど描き込まれているが古い。
+    strength: 混ぜる割合
+    update() には「引き継ぐ結果のフレーム → 今のフレーム」のモーションベクトルを渡す。
+    """
+
+    def __init__(self, stream, strength: float = 0.5, source_index: int = 0):
+        from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img import retrieve_latents
+
+        self.stream = stream
+        self.strength = strength
+        self.source_index = source_index
+        self.frames_back = source_index + 1
+        self.prev = None
+        self.flow = None
+        self._retrieve_latents = retrieve_latents
+        self._orig_encode = stream.encode_image
+        self._orig_unet_step = stream.unet_step
+        stream.encode_image = self._encode_image
+        stream.unet_step = self._unet_step
+
+    def reset(self):
+        self.prev = None
+        self.flow = None
+
+    def detach(self):
+        """StreamDiffusionの処理を元に戻す"""
+        self.stream.encode_image = self._orig_encode
+        self.stream.unet_step = self._orig_unet_step
+
+    def update(self, flow):
+        """flow: [2, H, W] (px)。引き継ぐ結果のフレームから今のフレームまでの動き。None なら混ぜない"""
+        self.flow = flow
+
+    def _unet_step(self, *args, **kwargs):
+        denoised_batch, model_pred = self._orig_unet_step(*args, **kwargs)
+        i = min(self.source_index, denoised_batch.shape[0] - 1)
+        self.prev = denoised_batch[i : i + 1].detach().clone()
+        return denoised_batch, model_pred
+
+    def _encode_image(self, image_tensors):
+        s = self.stream
+        image_tensors = image_tensors.to(device=s.device, dtype=s.vae.dtype)
+        img_latent = self._retrieve_latents(s.vae.encode(image_tensors), s.generator)
+        img_latent = img_latent * s.vae.config.scaling_factor
+        if self.prev is not None and self.flow is not None and self.strength > 0:
+            scale = image_tensors.shape[-1] // img_latent.shape[-1]
+            flow_lat = F.avg_pool2d(self.flow.to(img_latent.device, torch.float32).unsqueeze(0), scale)[0] / scale
+            grid = _backward_grid(flow_lat)
+            warped = F.grid_sample(self.prev.float(), grid, mode="bilinear", padding_mode="zeros", align_corners=False)
+            # 画面外から入ってきた部分は、前の結果がないので入力だけを使う
+            m = self.strength * _valid_mask(grid).to(img_latent.dtype)
+            img_latent = (1 - m) * img_latent + m * warped.to(img_latent.dtype)
+        return s.add_noise(img_latent, s.init_noise[0], 0)
+
+
 class OutputBlender:
     """前のフレームの出力をモーションベクトルで今の位置にずらし、今の出力と混ぜる。
 

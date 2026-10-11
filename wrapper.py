@@ -416,6 +416,9 @@ class StreamDiffusionWrapper:
         try:  # Load from local directory
             pipe: StableDiffusionPipeline = StableDiffusionPipeline.from_pretrained(
                 model_id_or_path,
+                # 使わないセーフティチェッカーは読み込まない(ダウンロード量とVRAMの節約)
+                safety_checker=None,
+                requires_safety_checker=False,
             ).to(device=self.device, dtype=self.dtype)
 
         except ValueError:  # Load from huggingface

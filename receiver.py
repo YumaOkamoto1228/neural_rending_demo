@@ -11,13 +11,18 @@ from wrapper import StreamDiffusionWrapper
 warnings.filterwarnings("ignore")
 torch.manual_seed(42)
 
+# 使用するモデル(SD1.5系・diffusers形式)。切り替えるときはここだけ変更する
+# MODEL_ID = "runwayml/stable-diffusion-v1-5"
+# MODEL_ID = "SG161222/Realistic_Vision_V5.1_noVAE"
+MODEL_ID = "Lykon/dreamshaper-8"
+
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(('127.0.0.1', 5005))
 
 wrapper = StreamDiffusionWrapper(
-    model_id_or_path="runwayml/stable-diffusion-v1-5",
+    model_id_or_path=MODEL_ID,
     lcm_lora_id="latent-consistency/lcm-lora-sdv1-5",
-    t_index_list=[32, 45],
+    t_index_list=[25, 40, 45],
     frame_buffer_size=1,
     width=512,
     height=512,
@@ -30,7 +35,9 @@ wrapper = StreamDiffusionWrapper(
 )
 
 wrapper.prepare(
-        prompt="photorealistic, masterpiece, highly detailed medieval village, stone wall, orange brick house, Black roof, dirt and cobblestone path, 4k reso",
+        # シーンの実際の見た目(白い漆喰壁・木組み・わらぶき屋根)に合わせる。ずれると建物の形まで変わってしまう
+        prompt="photo of a medieval european village, half-timbered houses with white plaster walls and thatched straw roofs, "
+        "stone paved square, low stone wall, blue sky, natural sunlight, realistic, highly detailed",
         #安定化のため、Negative Promptの内容を絞る
         negative_prompt="low quality, worst quality, deformed, simple, plain, cartoon, lowres",
         num_inference_steps=50,

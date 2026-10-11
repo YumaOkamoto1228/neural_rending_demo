@@ -8,7 +8,7 @@ import torch
 import warnings
 from PIL import Image
 from wrapper import StreamDiffusionWrapper
-from motion import parse_packet, flow_from_depth, linear_eye_depth
+from motion import parse_packet, flow_from_depth, linear_eye_depth, camera_delta
 from temporal import NoiseWarper, OutputBlender
 
 warnings.filterwarnings("ignore")
@@ -26,7 +26,7 @@ SIZE = 512
 USE_NOISE_WARP = True  # ノイズを景色と一緒に動かす
 BLEND_ALPHA = 0.5  # 前のフレームの出力を混ぜる割合(0で無効)
 MAX_BLEND_FLOW = 64  # これより大きく動いたフレームは混ぜない(残像を防ぐ)
-FLOW_DEADZONE = 0.25  # 全画素の動きがこれ(px)未満なら静止とみなす(カメラのわずかな揺れを無視する)
+FLOW_DEADZONE = 1.0  # 全画素の動きがこれ(px)未満なら静止とみなす(カメラのわずかな揺れを無視する)
 DEBUG_MOTION = False  # 動きの計算が正しいか確認するための表示と画像保存(約9ms遅くなる)
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -67,6 +67,8 @@ lag = len(T_INDEX_LIST) - 1
 flows = deque([None] * (lag + 1), maxlen=lag + 1)
 prev_meta = None
 flow_sum = 0.0
+cam_move_sum = 0.0
+cam_rot_sum = 0.0
 prev_gray = None
 debug_saved = False
 motion_check = ""
@@ -102,6 +104,9 @@ while True:
         if flow_mag < FLOW_DEADZONE:
             flow = torch.zeros_like(flow)
         flow_sum += flow_mag
+        cam_move, cam_rot = camera_delta(meta, prev_meta)
+        cam_move_sum += cam_move
+        cam_rot_sum += cam_rot
     prev_meta = meta
     flows.append(flow)
     if warper:
@@ -165,11 +170,14 @@ while True:
             f"wait {avg['wait']:5.1f}ms | decode {avg['decode']:4.1f}ms | motion {avg['motion']:4.1f}ms | "
             f"AI {avg['ai']:5.1f}ms | imshow {avg['imshow']:4.1f}ms | "
             f"send {avg['send']:4.1f}ms | dropped {dropped} | 最大の動き {flow_sum / frames:5.2f}px"
+            f" | カメラ {cam_move_sum / frames * 1000:6.2f}mm {cam_rot_sum / frames:6.3f}°"
             + (" | 深度なし(JPEGのみ)" if meta is None else "")
             + (f"\n    {motion_check}" if DEBUG_MOTION and motion_check else "")
         )
         motion_check = ""
         flow_sum = 0.0
+        cam_move_sum = 0.0
+        cam_rot_sum = 0.0
         stats = dict.fromkeys(stats, 0.0)
         frames = 0
         dropped = 0

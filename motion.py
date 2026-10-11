@@ -89,3 +89,15 @@ def flow_from_depth(cur: FrameMeta, prev: FrameMeta, size: int, device="cuda") -
     ])
     flow = torch.nan_to_num(flow, nan=0.0, posinf=0.0, neginf=0.0)
     return F.interpolate(flow.unsqueeze(0), size=(size, size), mode="bilinear", align_corners=False)[0]
+
+
+def camera_delta(cur: FrameMeta, prev: FrameMeta):
+    """前のフレームからのカメラの移動量(m)と回転量(度)"""
+    def pose(view):
+        cam_to_world = np.linalg.inv(view)
+        return cam_to_world[:3, 3], cam_to_world[:3, :3]
+    p0, r0 = pose(prev.view)
+    p1, r1 = pose(cur.view)
+    rel = r0.T @ r1
+    angle = np.degrees(np.arccos(np.clip((np.trace(rel) - 1) / 2, -1, 1)))
+    return float(np.linalg.norm(p1 - p0)), float(angle)

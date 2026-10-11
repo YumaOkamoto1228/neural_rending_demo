@@ -27,7 +27,10 @@ import onnx
 import onnx_graphsurgeon as gs
 import tensorrt as trt
 import torch
-from cuda import cudart
+try:  # cuda-python 12.8以降の新しい配置
+    from cuda.bindings import runtime as cudart
+except ImportError:
+    from cuda import cudart
 from PIL import Image
 from polygraphy import cuda
 from polygraphy.backend.common import bytes_from_path
@@ -246,17 +249,20 @@ class Engine:
             self.context = self.engine.create_execution_context()
 
     def allocate_buffers(self, shape_dict=None, device="cuda"):
-        for idx in range(trt_util.get_bindings_per_profile(self.engine)):
-            binding = self.engine[idx]
-            if shape_dict and binding in shape_dict:
-                shape = shape_dict[binding]
+        # TensorRT 10でbinding系API(get_binding_shape等)が削除されたため、テンソル名ベースのAPIを使う
+        for idx in range(self.engine.num_io_tensors):
+            name = self.engine.get_tensor_name(idx)
+            if shape_dict and name in shape_dict:
+                shape = tuple(shape_dict[name])
             else:
-                shape = self.engine.get_binding_shape(binding)
-            dtype = trt.nptype(self.engine.get_binding_dtype(binding))
-            if self.engine.binding_is_input(binding):
-                self.context.set_binding_shape(idx, shape)
-            tensor = torch.empty(tuple(shape), dtype=numpy_to_torch_dtype_dict[dtype]).to(device=device)
-            self.tensors[binding] = tensor
+                shape = tuple(self.engine.get_tensor_shape(name))
+            # 形状が前回と同じなら、毎フレームGPUメモリを確保し直さずに再利用する
+            if name in self.tensors and tuple(self.tensors[name].shape) == shape:
+                continue
+            dtype = trt.nptype(self.engine.get_tensor_dtype(name))
+            if self.engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
+                self.context.set_input_shape(name, shape)
+            self.tensors[name] = torch.empty(shape, dtype=numpy_to_torch_dtype_dict[dtype], device=device)
 
     def infer(self, feed_dict, stream, use_cuda_graph=False):
         for name, buf in feed_dict.items():
@@ -423,6 +429,8 @@ def export_onnx(
             input_names=model_data.get_input_names(),
             output_names=model_data.get_output_names(),
             dynamic_axes=model_data.get_dynamic_axes(),
+            # torch 2.9以降は新方式(dynamo)が既定になったため、従来のTorchScript方式を明示する
+            dynamo=False,
         )
     del model
     gc.collect()

@@ -469,17 +469,17 @@ class StreamDiffusionWrapper:
                 stream.pipe.enable_xformers_memory_efficient_attention()
             if acceleration == "tensorrt":
                 from polygraphy import cuda
-                from streamdiffusion.acceleration.tensorrt import (
+                from trt_accel import (
                     TorchVAEEncoder,
                     compile_unet,
                     compile_vae_decoder,
                     compile_vae_encoder,
                 )
-                from streamdiffusion.acceleration.tensorrt.engine import (
+                from trt_accel.engine import (
                     AutoencoderKLEngine,
                     UNet2DConditionModelEngine,
                 )
-                from streamdiffusion.acceleration.tensorrt.models import (
+                from trt_accel.models import (
                     VAE,
                     UNet,
                     VAEEncoder,

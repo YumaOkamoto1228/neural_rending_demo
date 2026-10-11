@@ -8,7 +8,7 @@ from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img impo
 )
 from polygraphy import cuda
 
-from ...pipeline import StreamDiffusion
+from streamdiffusion.pipeline import StreamDiffusion
 from .builder import EngineBuilder, create_onnx_path
 from .engine import AutoencoderKLEngine, UNet2DConditionModelEngine
 from .models import VAE, BaseModel, UNet, VAEEncoder

@@ -64,3 +64,9 @@ output_final.png
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# =========================
+# TensorRT (GPU固有の生成物・数GB)
+# =========================
+engines/
+*.onnx

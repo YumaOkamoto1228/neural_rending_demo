@@ -7,12 +7,16 @@ village.png を少しずつ横にずらした画像列で「カメラの横移�
 - change  : 出力と入力の平均色差(0-255)。AIが元の映像をどれだけ描き変えたか。
             小さすぎるとAIの効果が薄い(元の映像のまま)ことを意味する。
 
+移動量が分かっているので、それをモーションベクトルとして temporal.py の処理も試せる。
+(実際のUnityでは奥行きによる見え方の違いや物陰があるため、ここまで理想的にはならない)
+
 使い方:
     venv/Scripts/python.exe tools/measure_flicker.py
 結果は tools/flicker_out/ に保存される(表・サンプル画像・GIF)。
 """
 import os
 import sys
+from collections import deque
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(ROOT)
@@ -21,6 +25,7 @@ sys.path.insert(0, ROOT)
 import numpy as np
 import torch
 from PIL import Image
+from temporal import NoiseWarper, OutputBlender
 from wrapper import StreamDiffusionWrapper
 
 MODEL_ID = "Lykon/dreamshaper-8"
@@ -31,13 +36,18 @@ PROMPT = (
 )
 NEGATIVE = "low quality, worst quality, deformed, simple, plain, cartoon, lowres"
 
-# 比較する t_index_list (すべて3ステップにしてTensorRTエンジンを共有する)
-CANDIDATES = [
-    [15, 30, 45],
-    [25, 40, 45],  # 現在の設定
-    [30, 40, 45],
-    [35, 42, 47],
-    [40, 45, 48],
+# (t_index_list, ノイズを動かすか, 前フレームを混ぜる割合)
+# t_index_listはすべて3ステップにしてTensorRTエンジンを共有する
+EXPERIMENTS = [
+    ([25, 40, 45], False, 0.0),  # 現在の設定
+    ([30, 40, 45], False, 0.0),
+    ([40, 45, 48], False, 0.0),
+    ([25, 40, 45], True, 0.0),
+    ([25, 40, 45], False, 0.5),
+    ([25, 40, 45], True, 0.5),
+    ([15, 30, 45], False, 0.0),
+    ([15, 30, 45], True, 0.0),
+    ([15, 30, 45], True, 0.5),
 ]
 
 SIZE = 512
@@ -68,13 +78,47 @@ def flicker_score(frames):
 
 
 def change_score(outputs, inputs):
-    """出力と入力の平均色差。StreamDiffusionは出力が数フレーム遅れるので、最も合う遅れ幅で比べる"""
-    best = None
-    for lag in range(4):
-        pairs = list(zip(outputs[lag:], inputs))
-        d = np.mean([np.abs(np.asarray(o, np.float32) - np.asarray(i, np.float32)).mean() for o, i in pairs])
-        best = d if best is None else min(best, d)
-    return float(best)
+    """出力と入力の平均色差(出力の遅れは除去済みのものを渡す)"""
+    return float(np.mean([np.abs(np.asarray(o, np.float32) - np.asarray(i, np.float32)).mean() for o, i in zip(outputs, inputs)]))
+
+
+def to_tensor(img):
+    return torch.from_numpy(np.asarray(img)).permute(2, 0, 1).float().cuda() / 255
+
+
+def to_pil(t):
+    return Image.fromarray((t.clamp(0, 1) * 255).round().byte().permute(1, 2, 0).cpu().numpy())
+
+
+def run(wrapper, inputs, t_list, warp_noise, blend_alpha):
+    wrapper.stream.t_list = t_list
+    wrapper.prepare(prompt=PROMPT, negative_prompt=NEGATIVE, num_inference_steps=50, guidance_scale=1.0)
+    warper = NoiseWarper(wrapper.stream) if warp_noise else None
+    blender = OutputBlender(blend_alpha) if blend_alpha > 0 else None
+
+    # カメラの横移動を表すモーションベクトル(景色は左へSHIFT動く)。全画素同じ値
+    pan = torch.zeros(2, SIZE, SIZE, device="cuda")
+    pan[0] = -SHIFT
+
+    for _ in range(WARMUP):
+        if warper:
+            warper.update(None)
+        wrapper(image=inputs[0])
+
+    lag = len(t_list) - 1  # StreamDiffusionの出力は(ステップ数-1)フレーム遅れる
+    flows = deque([None] * (lag + 1), maxlen=lag + 1)
+    outputs = []
+    for i, frame in enumerate(inputs):
+        flow = pan if i > 0 else None
+        flows.append(flow)
+        if warper:
+            warper.update(flow)
+        out = wrapper(image=frame)
+        if blender:
+            # 出力は lag フレーム前の入力に対応するので、その時点のモーションベクトルを使う
+            out = to_pil(blender(to_tensor(out), flows[0]))
+        outputs.append(out)
+    return outputs[lag:], inputs[: len(inputs) - lag]
 
 
 def main():
@@ -84,7 +128,7 @@ def main():
     wrapper = StreamDiffusionWrapper(
         model_id_or_path=MODEL_ID,
         lcm_lora_id="latent-consistency/lcm-lora-sdv1-5",
-        t_index_list=CANDIDATES[0],
+        t_index_list=EXPERIMENTS[0][0],
         frame_buffer_size=1,
         width=SIZE,
         height=SIZE,
@@ -96,36 +140,28 @@ def main():
         acceleration="tensorrt",
     )
 
-    rows = [("input", 0.0, flicker_score(inputs), 0.0)]
-    samples = [("input", inputs[N_FRAMES // 2])]
-    for t_list in CANDIDATES:
-        wrapper.stream.t_list = t_list
-        wrapper.prepare(prompt=PROMPT, negative_prompt=NEGATIVE, num_inference_steps=50, guidance_scale=1.0)
-        for _ in range(WARMUP):
-            wrapper(image=inputs[0])
-        # 出力の遅れを吸収するため、先頭フレームで埋めてから流す
-        outputs = [wrapper(image=f) for f in inputs]
-        lag = len(t_list) - 1
-        outputs = outputs[lag:]
-        name = str(t_list)
+    rows = [("input", 0.0, 0.0)]
+    samples = [inputs[N_FRAMES // 2]]
+    for t_list, warp_noise, alpha in EXPERIMENTS:
+        outputs, matched_inputs = run(wrapper, inputs, t_list, warp_noise, alpha)
+        name = f"{t_list} noise={'on' if warp_noise else 'off'} blend={alpha}"
         flick = flicker_score(outputs)
-        change = change_score(outputs, inputs)
-        rows.append((name, t_list[0], flick, change))
-        samples.append((name, outputs[N_FRAMES // 2]))
+        change = change_score(outputs, matched_inputs)
+        rows.append((name, flick, change))
+        samples.append(outputs[N_FRAMES // 2])
+        tag = f"{'_'.join(map(str, t_list))}_noise{int(warp_noise)}_blend{int(alpha * 100)}"
         small = [o.resize((256, 256)) for o in outputs]
-        small[0].save(
-            os.path.join(OUT_DIR, f"pan_{'_'.join(map(str, t_list))}.gif"),
-            save_all=True, append_images=small[1:], duration=66, loop=0,
-        )
-        print(f"{name:14s} flicker {flick:6.2f}  change {change:6.2f}", flush=True)
+        small[0].save(os.path.join(OUT_DIR, f"pan_{tag}.gif"), save_all=True, append_images=small[1:], duration=66, loop=0)
+        print(f"{name:40s} flicker {flick:6.2f}  change {change:6.2f}  ratio {flick / change:5.2f}", flush=True)
 
     with open(os.path.join(OUT_DIR, "result.md"), "w", encoding="utf-8") as f:
-        f.write("| t_index_list | flicker (小さいほど安定) | change (AIによる描き変え量) |\n|---|---|---|\n")
-        for name, _, flick, change in rows:
-            f.write(f"| {name} | {flick:.2f} | {change:.2f} |\n")
+        f.write("| 設定 | flicker (小さいほど安定) | change (描き変え量) | flicker/change |\n|---|---|---|---|\n")
+        for name, flick, change in rows:
+            ratio = f"{flick / change:.2f}" if change else "-"
+            f.write(f"| {name} | {flick:.2f} | {change:.2f} | {ratio} |\n")
 
     sheet = Image.new("RGB", (SIZE * len(samples), SIZE))
-    for i, (_, img) in enumerate(samples):
+    for i, img in enumerate(samples):
         sheet.paste(img, (i * SIZE, 0))
     sheet.save(os.path.join(OUT_DIR, "samples.png"))
 

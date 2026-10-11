@@ -47,6 +47,9 @@ class NoiseWarper:
     """
 
     TABLE = 1024  # ノイズ表の一辺(マス)。座標はこの大きさで折り返す
+    # 一度選んだマスは、座標がマスの中心から 0.5+HYSTERESIS 以上離れるまで切り替えない。
+    # カメラのわずかな揺れで座標が境界を行き来し、ノイズが切り替わり続けるのを防ぐ
+    HYSTERESIS = 0.25
 
     def __init__(self, stream, seed: int = 0):
         self.stream = stream
@@ -66,6 +69,9 @@ class NoiseWarper:
         """prepare() の後に呼ぶ。座標を初期化して履歴を消す"""
         # offset: 各マスが映している世界の位置 - 画面上の位置 (単位: マス)
         self.offset = torch.zeros_like(self.base)
+        # 画面の各マスが今使っているノイズ表の位置(世界座標を整数にしたもの)。
+        # 景色と一緒には動かさず、そのマスの座標が離れたときだけ選び直す
+        self.cell = self.base.clone()
         # 段階kのノイズは、k-1フレーム前の位置に合わせたものを使うため履歴を持つ
         self.history = deque([self._lookup()], maxlen=self.stream.init_noise.shape[0])
         self._apply()
@@ -83,7 +89,11 @@ class NoiseWarper:
         self._apply()
 
     def _lookup(self) -> torch.Tensor:
-        world = torch.floor(self.base + self.offset + 0.5).long() % self.TABLE
+        coord = self.base + self.offset
+        nearest = torch.floor(coord + 0.5)
+        far = (coord - self.cell).abs().amax(dim=0, keepdim=True) > 0.5 + self.HYSTERESIS
+        self.cell = torch.where(far, nearest, self.cell)
+        world = self.cell.long() % self.TABLE
         noise = self.table[:, :, world[1], world[0]]
         return noise.to(self.stream.init_noise.dtype)
 

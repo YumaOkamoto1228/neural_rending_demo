@@ -72,4 +72,8 @@ engines/
 *.onnx
 
 # ちらつき測定の出力
-tools/flicker_out/
+tools/flicker_out*/
+
+# receiver.py の動き確認用
+debug_depth.png
+debug_input.png

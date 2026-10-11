@@ -70,3 +70,6 @@ Thumbs.db
 # =========================
 engines/
 *.onnx
+
+# ちらつき測定の出力
+tools/flicker_out/

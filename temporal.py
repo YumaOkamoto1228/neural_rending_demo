@@ -193,7 +193,7 @@ class OutputBlender:
     - 隠れ判定: 前のフレームでは手前の物に隠れていた画素(visible=False)では混ぜない。
     """
 
-    def __init__(self, alpha: float = 0.5, clamp_size: int = 3):
+    def __init__(self, alpha: float = 0.5, clamp_size: int = 1):
         self.alpha = alpha
         self.clamp_size = clamp_size
         self.prev = None

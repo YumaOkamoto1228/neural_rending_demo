@@ -134,7 +134,7 @@ footer { font-size: .84rem; color: var(--muted); border-top: 1px solid var(--lin
     <figcaption>左端がUnityの映像(入力)。右の3列は、異なるAIモデルで描き直した結果。下段は指示文をシーンに合わせたもので、建物の配置が保たれている。</figcaption>
   </figure>
   <div class="prose">
-    <p>あらかじめ3Dモデルで作った世界を、AIで「見た目だけ」描き直すのが狙いです。建物の配置や形は3Dモデルが決めるので世界が破綻せず、細かな質感はAIが補うので、作り込みの少ない3Dモデルでも写実的な映像にできます。</p>
+    <p>プレイヤーはUnityの中を歩き回り、AIが描き直した映像を見ながら操作できます。すべて手元のPC(RTX 5070)の中で動きます。</p>
   </div>
 </section>
 
@@ -151,60 +151,77 @@ footer { font-size: .84rem; color: var(--muted); border-top: 1px solid var(--lin
 </section>
 
 <section>
-  <h2>改善前の仕組みと課題</h2>
+  <div class="eyebrow">1 / 経緯と狙い</div>
+  <h2>世界の形は3Dモデルで、見た目はAIで</h2>
+  <div class="prose">
+    <p>Google DeepMindの「Genie 3」のように、AIが映像そのものを生成して操作できる世界を作る技術が出てきています。ただ、AIが世界をゼロから生成し続けると、時間がたつにつれて建物の形や配置が崩れる(世界が破綻する)ことがあります。</p>
+    <p>そこで、<strong>世界の形はあらかじめ3Dモデルで作っておき、AIには見た目の加工だけを任せる</strong>方法を考えました。</p>
+    <ul>
+      <li>建物の配置や形は3Dモデルが決めるので、世界が破綻しない</li>
+      <li>細かな質感はAIが描き足すので、作り込みの少ない(容量の小さい)3Dモデルでも写実的な映像になる</li>
+      <li>ローカルのAIで動かすので、利用料などのコストがかからない</li>
+    </ul>
+    <p>これを、<strong>手元のPCで、操作できる速さで動かす</strong>ことを目標にしました。</p>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">2 / 最初に作った仕組み</div>
+  <h2>リアルタイムで動かすための工夫</h2>
   <div class="diagram">
 <pre class="mermaid">
 flowchart LR
-    U[Unity<br>カメラ映像] -- JPEG / UDP --> P[Python<br>最新の1枚を受信]
-    P --> AI[画像生成AI<br>SD1.5 + LCM-LoRA]
+    C[Unity<br>AI用カメラ 512x512] -- JPEG 1枚=1パケット / UDP --> P[Python<br>最新の1枚だけ受信]
+    P --> AI[StreamDiffusion<br>img2img + LCM-LoRA + TinyVAE]
     AI -- JPEG / UDP --> R[Unity<br>画面に表示]
 </pre>
   </div>
   <div class="prose">
-    <p>Unityのカメラ映像をPythonに送り、AIで描き直して送り返すだけの構成でした。表示まで約3秒遅れ、画質も低い状態でした。調べると、次の原因が見つかりました。</p>
+    <p>Unityで描いた映像をPythonに送り、AIで描き直してUnityに送り返す構成です。最初の実装の時点で、遅れを減らすために次の工夫をしていました。</p>
   </div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>課題</th><th>調べて分かった原因</th></tr></thead>
+      <thead><tr><th>工夫</th><th>内容と理由</th></tr></thead>
       <tbody>
-        <tr><td>約3秒の遅れ</td><td>PythonのAIライブラリ(PyTorch)がRTX 5070に対応していなかった。高速化ツール(TensorRT)も初期化に失敗しており、エラーを出さずに高速化なしで動いていた</td></tr>
-        <tr><td>画質が低い</td><td>汎用のAIモデルを使っていた。AIへの指示文が「オレンジのレンガの家、黒い屋根」で、実際の村(白い壁、わらぶき屋根)と食い違っていた</td></tr>
-        <tr><td>カメラを動かすと模様がちらつく</td><td>AIは毎フレームを独立した1枚として描き直すため、前に描いた模様を覚えていない</td></tr>
+        <tr><td>UnityとPythonを分ける</td><td>3Dの描画はUnity、AIはPythonと、それぞれ得意な環境で動かし、同じPCの中で通信する</td></tr>
+        <tr><td>TCPではなくUDPで通信</td><td>TCPは届かなかったデータを再送して待つため、遅れが出る。映像は最新の1枚が届けばよいので、待たないUDPを選んだ</td></tr>
+        <tr><td>1フレームをJPEGで1パケットに収める</td><td>映像をJPEGに圧縮し、UDPの1回の送信(約64KB)に収めた。分割や再組み立てが不要になる</td></tr>
+        <tr><td>古いフレームを捨てて最新の1枚だけ処理</td><td>AIの処理が追いつかないと、届いた映像が溜まって遅れが積み重なる。溜まった分を読み捨て、常に最新の映像だけを処理する</td></tr>
+        <tr><td>AI用のカメラと解像度を固定</td><td>画面表示とは別のカメラで512×512の画像を作り、送信は30fpsに固定。AIの入力をいつも同じ大きさ・量にする</td></tr>
+        <tr><td>StreamDiffusion</td><td>画像生成AIを動画向けに高速化する仕組み。複数フレームの処理をずらして並行して進める</td></tr>
+        <tr><td>img2img(元の画像から描き直す)</td><td>ゼロから描かず、Unityの映像にノイズを足してから描き直すことで、建物の配置を保つ</td></tr>
+        <tr><td>LCM-LoRA / TinyVAE / 半精度計算</td><td>通常は数十段階かかる描画を3段階で済ませるLCM-LoRA、軽量な画像変換のTinyVAE、半精度計算で処理を軽くする</td></tr>
+        <tr><td>CFGを使わない</td><td>指示文の効きを強める処理(CFG)はAIの計算が倍になるため、使わずに速さを優先した</td></tr>
+        <tr><td>乱数の固定、避けたい要素の指示を絞る</td><td>フレームごとに結果がばらつかないようにする</td></tr>
+        <tr><td>起動時のウォームアップ</td><td>最初の数フレームが遅くならないよう、映像を受け取る前に空の画像でAIを動かしておく</td></tr>
+        <tr><td>TensorRTでの高速化(を想定)</td><td>NVIDIAの高速化ツールでAIの計算を最適化する設定にしていた</td></tr>
       </tbody>
     </table>
   </div>
 </section>
 
 <section>
-  <h2>改善後の仕組み</h2>
-  <div class="diagram">
-<pre class="mermaid">
-flowchart LR
-    subgraph Unity
-        A[カメラ映像] --> S[送信]
-        D[深度 64x64] --> S
-        M[カメラの位置と向き] --> S
-        R[画面に表示]
-    end
-    subgraph Python
-        S -- UDP --> P[最新の1枚を受信]
-        P --> F[動きを計算]
-        F --> N[ノイズを景色と一緒に動かす]
-        P --> AI[画像生成AI<br>TensorRTで高速化]
-        N --> AI
-        AI --> B[前のフレームと合成]
-        F --> B
-    end
-    B -- UDP --> R
-</pre>
-  </div>
+  <div class="eyebrow">3 / 見えてきた課題</div>
+  <h2>動いたが、目標とは離れていた</h2>
   <div class="prose">
-    <p>Unityから映像と一緒に<strong>深度</strong>と<strong>カメラの位置と向き</strong>を送り、各点が前に処理したフレームからどれだけ動いたかをPythonで計算します。その動きを使って、AIに与えるノイズを景色と一緒に動かし、描き直した映像を前のフレームの結果と合成します。追加で送るデータは1フレームあたり約8KBです。</p>
+    <p>この仕組みで動かすことはできましたが、操作してから映像が変わるまでに約3秒かかり、画質も低く、カメラを動かすと模様がちらつく状態でした。調べると、次の原因が見つかりました。</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>課題</th><th>調べて分かった原因</th></tr></thead>
+      <tbody>
+        <tr><td>約3秒の遅れ</td><td>Pythonの環境で複数のバージョンのライブラリが混ざって壊れていた。動いていたPyTorch(AIの計算ライブラリ)はRTX 5070に対応していなかった。TensorRTも、必要なライブラリが入っておらず、RTX 50シリーズに対応していない古いバージョンだったため、エラーを出さずに<strong>高速化なしで動いていた</strong></td></tr>
+        <tr><td>画質が低い</td><td>汎用のAIモデルを使っていた。AIへの指示文が「オレンジのレンガの家、黒い屋根」で、実際の村(白い壁、わらぶき屋根)と食い違っていた</td></tr>
+        <tr><td>カメラを動かすと模様がちらつく</td><td>AIは毎フレームを独立した1枚として描き直すため、前に描いた模様を覚えていない。AIに与えるノイズが画面に固定されていて、カメラが動くと模様が建物の上を滑る</td></tr>
+      </tbody>
+    </table>
   </div>
 </section>
 
+
 <section>
-  <h2>改善の流れ</h2>
+  <div class="eyebrow">4 / 改善の取り組み</div>
+  <h2>課題を一つずつ解決する</h2>
   <div class="steps">
     <div class="step"><div class="step-body">
       <h3>実行環境を作り直す</h3>
@@ -261,6 +278,36 @@ flowchart LR
 </section>
 
 <section>
+  <div class="eyebrow">5 / 改善後の仕組み</div>
+  <h2>Unityの3D情報も送り、ちらつきを抑える</h2>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+    subgraph Unity
+        A[カメラ映像] --> S[送信]
+        D[深度 64x64] --> S
+        M[カメラの位置と向き] --> S
+        R[画面に表示]
+    end
+    subgraph Python
+        S -- UDP --> P[最新の1枚を受信]
+        P --> F[動きを計算]
+        F --> N[ノイズを景色と一緒に動かす]
+        P --> AI[画像生成AI<br>TensorRTで高速化]
+        N --> AI
+        AI --> B[前のフレームと合成]
+        F --> B
+    end
+    B -- UDP --> R
+</pre>
+  </div>
+  <div class="prose">
+    <p>Unityから映像と一緒に<strong>深度</strong>と<strong>カメラの位置と向き</strong>を送り、各点が前に処理したフレームからどれだけ動いたかをPythonで計算します。その動きを使って、AIに与えるノイズを景色と一緒に動かし、描き直した映像を前のフレームの結果と合成します。追加で送るデータは1フレームあたり約8KBです。</p>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">6 / 成果</div>
   <h2>数値で見る成果</h2>
   <div class="bars" role="img" aria-label="改善前後の比較グラフ">
     <div class="bar-group">
@@ -310,6 +357,7 @@ flowchart LR
 </section>
 
 <section>
+  <div class="eyebrow">7 / 限界</div>
   <h2>仕組み上の限界</h2>
   <div class="note">
     <p><strong>カメラを動かすと、建物の細かな見た目は少しずつ変わります。</strong></p>

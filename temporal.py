@@ -76,8 +76,14 @@ class NoiseWarper:
         self.history = deque([self._lookup()], maxlen=self.stream.init_noise.shape[0])
         self._apply()
 
-    def update(self, flow: torch.Tensor):
-        """毎フレーム、AIに画像を渡す前に呼ぶ。flow: [2, H, W] (px)"""
+    def update(self, flow: torch.Tensor, visible: torch.Tensor = None):
+        """毎フレーム、AIに画像を渡す前に呼ぶ。flow: [2, H, W] (px)
+
+        visible: [H, W] (bool, 省略可)。前のフレームでは手前の物に隠れていた画素は False。
+        物陰から現れた部分は、前のフレームでは手前の物の端が写っていたため、そのまま引き継ぐと
+        端の細い帯のノイズが毎フレームコピーされて横に引き伸ばされ、AIが縞状の色の崩れを描いてしまう
+        (実測で隣り合うマスの86%が同じ値になった)。そこでは、ノイズ表の新しい場所を割り当てる。
+        """
         if flow is not None:
             # 画像の解像度のモーションベクトルを、潜在空間のマス単位に縮める
             flow_lat = F.avg_pool2d(flow.to(self.stream.device, torch.float32).unsqueeze(0), self.scale)[0] / self.scale
@@ -85,6 +91,13 @@ class NoiseWarper:
             # 前のフレームで対応していたマスの offset を引き継ぐ。画面外から入ってきたマスは端の値で延長する
             prev = F.grid_sample(self.offset.unsqueeze(0), grid, mode="bilinear", padding_mode="border", align_corners=False)[0]
             self.offset = prev - flow_lat
+            if visible is not None:
+                # マスの中に1画素でも隠れていた画素があれば、そのマスは物陰から現れたとみなす
+                vis = visible.to(self.stream.device).float()[None, None]
+                hidden = -F.max_pool2d(-vis, self.scale)[0] < 0.5  # [1, lh, lw]
+                if hidden.any():
+                    fresh = torch.randint(0, self.TABLE, (2, 1, 1), device=self.stream.device).float()
+                    self.offset = torch.where(hidden, fresh, self.offset)
         self.history.appendleft(self._lookup())
         self._apply()
 

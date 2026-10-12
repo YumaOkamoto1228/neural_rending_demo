@@ -151,7 +151,7 @@ while True:
     prev_meta = meta
     flows.append((flow, visible))
     if warper:
-        warper.update(flow)
+        warper.update(flow, visible)
 
     if DEBUG_MOTION and meta is not None:
         gray = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY).astype(np.float32)

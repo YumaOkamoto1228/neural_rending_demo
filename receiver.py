@@ -9,7 +9,7 @@ import warnings
 from PIL import Image
 from wrapper import StreamDiffusionWrapper
 from motion import parse_packet, flow_from_depth, linear_eye_depth, camera_delta
-from temporal import NoiseWarper, OutputBlender
+from temporal import LatentFeedback, NoiseWarper, OutputBlender
 
 warnings.filterwarnings("ignore")
 torch.manual_seed(42)
@@ -19,10 +19,22 @@ torch.manual_seed(42)
 MODEL_ID = "SG161222/Realistic_Vision_V5.1_noVAE"
 # MODEL_ID = "Lykon/dreamshaper-8"
 
-T_INDEX_LIST = [25, 40, 45]
+# 設定の組み合わせ。見比べるときはここだけ変更する(docs/flicker_results.md 参照)
+#   "v1.0"     : ノイズ移動＋前フレーム出力の合成
+#   "feedback" : v1.0 に、前フレームの結果の引き継ぎを追加(描き変えを弱めて、引き継ぎで補う)
+PRESET = "feedback"
+
+if PRESET == "feedback":
+    T_INDEX_LIST = [35, 42, 47]
+    FEEDBACK_STRENGTH = 0.5  # 前フレームの結果を入力に混ぜる割合
+    FEEDBACK_SOURCE = 2  # 引き継ぐ結果(2 = 3フレーム前の最終結果)
+else:
+    T_INDEX_LIST = [25, 40, 45]
+    FEEDBACK_STRENGTH = 0.0
+    FEEDBACK_SOURCE = 0
 SIZE = 512
 
-# ちらつき対策(Unityから深度とカメラ行列が届いたときだけ有効。docs/flicker_results.md 参照)
+# ちらつき対策(Unityから深度とカメラ行列が届いたときだけ有効)
 USE_NOISE_WARP = True  # ノイズを景色と一緒に動かす
 BLEND_ALPHA = 0.5  # 前のフレームの出力を混ぜる割合(0で無効)
 MAX_BLEND_FLOW = 64  # これより大きく動いたフレームは混ぜない(残像を防ぐ)
@@ -31,6 +43,9 @@ DEBUG_MOTION = False  # 動きの計算が正しいか確認するための表�
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(('127.0.0.1', 5005))
+# Windowsでは、送信先(Unityの5006番)が閉じていると、送信したソケットの次の受信がエラーになる。
+# Unityを止めても受信が止まらないよう、送信は別のソケットで行う
+send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 wrapper = StreamDiffusionWrapper(
     model_id_or_path=MODEL_ID,
@@ -62,9 +77,12 @@ for _ in range(wrapper.batch_size):
 
 warper = NoiseWarper(wrapper.stream) if USE_NOISE_WARP else None
 blender = OutputBlender(BLEND_ALPHA) if BLEND_ALPHA > 0 else None
+feedback = LatentFeedback(wrapper.stream, FEEDBACK_STRENGTH, FEEDBACK_SOURCE) if FEEDBACK_STRENGTH > 0 else None
 # AIの出力は (ステップ数-1) フレーム遅れるので、合成にはその時点のモーションベクトルを使う
 lag = len(T_INDEX_LIST) - 1
 flows = deque([None] * (lag + 1), maxlen=lag + 1)
+# 引き継ぐ結果は数フレーム前のものなので、そのフレームのカメラ行列から直接動きを計算する
+past_metas = deque([None] * 4, maxlen=4)
 prev_meta = None
 flow_sum = 0.0
 cam_move_sum = 0.0
@@ -107,6 +125,17 @@ while True:
         cam_move, cam_rot = camera_delta(meta, prev_meta)
         cam_move_sum += cam_move
         cam_rot_sum += cam_rot
+    if feedback:
+        src_meta = past_metas[-feedback.frames_back]
+        fb_flow = None
+        if meta is not None and src_meta is not None:
+            fb_flow = flow_from_depth(meta, src_meta, SIZE)
+            if fb_flow.abs().amax().item() < FLOW_DEADZONE:
+                fb_flow = torch.zeros_like(fb_flow)
+            elif fb_flow.abs().median() > MAX_BLEND_FLOW:
+                fb_flow = None  # 大きく動いたときは前の結果を引き継がない
+        feedback.update(fb_flow)
+    past_metas.append(meta)
     prev_meta = meta
     flows.append(flow)
     if warper:
@@ -151,7 +180,7 @@ while True:
 
     # AIで変換した画像をJPEGにエンコード
     _, encoded_img = cv2.imencode('.jpg', output_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
-    sock.sendto(encoded_img.tobytes(), ('127.0.0.1', 5006))
+    send_sock.sendto(encoded_img.tobytes(), ('127.0.0.1', 5006))
     t6 = time.perf_counter()
 
     stats["wait"] += t1 - t0

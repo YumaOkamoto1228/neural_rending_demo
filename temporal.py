@@ -173,24 +173,38 @@ class OutputBlender:
     """前のフレームの出力をモーションベクトルで今の位置にずらし、今の出力と混ぜる。
 
     alpha は前のフレームを混ぜる割合。大きいほど安定するが、動きが速いと残像が出やすい。
+
+    残像を防ぐため、ゲームのTAA(時間方向のアンチエイリアス)で使われる2つの手法を使う。
+    - 近傍クランプ: 前のフレームの色を、今のフレームの周囲 clamp_size x clamp_size 画素の色の範囲に収める。
+      今の映像にない色(建物の残像など)は混ざらなくなる。
+    - 隠れ判定: 前のフレームでは手前の物に隠れていた画素(visible=False)では混ぜない。
     """
 
-    def __init__(self, alpha: float = 0.5):
+    def __init__(self, alpha: float = 0.5, clamp_size: int = 3):
         self.alpha = alpha
+        self.clamp_size = clamp_size
         self.prev = None
 
     def reset(self):
         self.prev = None
 
-    def __call__(self, image: torch.Tensor, flow: torch.Tensor) -> torch.Tensor:
-        """image: [3, H, W] (0-1), flow: [2, H, W] (px)"""
+    def __call__(self, image: torch.Tensor, flow: torch.Tensor, visible: torch.Tensor = None) -> torch.Tensor:
+        """image: [3, H, W] (0-1), flow: [2, H, W] (px), visible: [H, W] (bool, 省略可)"""
         if self.prev is None or flow is None:
             self.prev = image
             return image
         grid = _backward_grid(flow.to(image.device, torch.float32))
         warped = F.grid_sample(self.prev.unsqueeze(0).float(), grid, mode="bilinear", align_corners=False)[0]
-        valid = _valid_mask(grid).to(image.dtype)
-        a = self.alpha * valid
+        if self.clamp_size > 1:
+            k, p = self.clamp_size, self.clamp_size // 2
+            img = image.unsqueeze(0).float()
+            lo = -F.max_pool2d(-img, k, stride=1, padding=p)[0]
+            hi = F.max_pool2d(img, k, stride=1, padding=p)[0]
+            warped = torch.maximum(torch.minimum(warped, hi), lo)
+        valid = _valid_mask(grid)
+        if visible is not None:
+            valid = valid & visible.to(valid.device)
+        a = self.alpha * valid.to(image.dtype)
         out = (1 - a) * image + a * warped.to(image.dtype)
         self.prev = out
         return out

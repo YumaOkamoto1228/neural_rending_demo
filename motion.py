@@ -13,6 +13,8 @@ import torch
 import torch.nn.functional as F
 
 MAGIC = b"NRF1"
+# 前のフレームの深度よりこの割合以上奥なら、隠れていたとみなす
+OCCLUSION_TOLERANCE = 0.1
 _HEADER = struct.Struct("<4sIIff16f16fHH")
 
 
@@ -53,8 +55,12 @@ def linear_eye_depth(meta: FrameMeta, raw: torch.Tensor) -> torch.Tensor:
     return n * f / (f - raw * (f - n))
 
 
-def flow_from_depth(cur: FrameMeta, prev: FrameMeta, size: int, device="cuda") -> torch.Tensor:
-    """前のフレーム → 今のフレームで、各画素が画面上で何px動いたか。[2, size, size] (x右, y下が正)"""
+def flow_from_depth(cur: FrameMeta, prev: FrameMeta, size: int, device="cuda", return_visible=False):
+    """前のフレーム → 今のフレームで、各画素が画面上で何px動いたか。[2, size, size] (x右, y下が正)
+
+    return_visible=True のときは (flow, visible) を返す。visible [size, size] は、その画素が前のフレームでも
+    見えていたなら True。画面外から入ってきた画素や、前のフレームでは手前の物に隠れていた画素は False。
+    """
     h, w = cur.depth.shape
     raw = torch.from_numpy(cur.depth).to(device)
     eye = linear_eye_depth(cur, raw)
@@ -88,7 +94,22 @@ def flow_from_depth(cur: FrameMeta, prev: FrameMeta, size: int, device="cuda") -
         -(ndc_y - prev_ndc_y) / 2 * size,
     ])
     flow = torch.nan_to_num(flow, nan=0.0, posinf=0.0, neginf=0.0)
-    return F.interpolate(flow.unsqueeze(0), size=(size, size), mode="bilinear", align_corners=False)[0]
+    flow = F.interpolate(flow.unsqueeze(0), size=(size, size), mode="bilinear", align_corners=False)[0]
+    if not return_visible:
+        return flow
+
+    # 前のフレームでその位置に写っていた物までの距離と比べ、明らかに奥なら「手前の物に隠れていた」とみなす
+    grid = torch.stack([prev_ndc_x, -prev_ndc_y], dim=-1).unsqueeze(0)  # grid_sampleは上が-1
+    prev_raw = torch.from_numpy(prev.depth).to(device)[None, None]
+    prev_eye = linear_eye_depth(prev, F.grid_sample(prev_raw, grid, mode="nearest", align_corners=False)[0, 0])
+    proj_eye = clip[3].reshape(h, w)  # 前のカメラから見た、この画素の物までの距離
+    inside = (prev_ndc_x.abs() <= 1) & (prev_ndc_y.abs() <= 1) & (proj_eye > 0)
+    hidden = proj_eye > prev_eye * (1 + OCCLUSION_TOLERANCE) + 0.05
+    visible = inside & ~hidden
+    # 深度は粗い(64x64)ので、隠れていた部分の周りも少し広げて除外する
+    visible = -F.max_pool2d(-visible.float()[None, None], 3, stride=1, padding=1)
+    visible = F.interpolate(visible, size=(size, size), mode="nearest")[0, 0] > 0.5
+    return flow, visible
 
 
 def camera_delta(cur: FrameMeta, prev: FrameMeta):

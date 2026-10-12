@@ -1,5 +1,6 @@
 import socket
 import select
+import sys
 import time
 from collections import deque
 import cv2
@@ -25,8 +26,13 @@ SIZE = 512
 # ちらつき対策(Unityから深度とカメラ行列が届いたときだけ有効。docs/flicker_results.md 参照)
 USE_NOISE_WARP = True  # ノイズを景色と一緒に動かす
 BLEND_ALPHA = 0.5  # 前のフレームの出力を混ぜる割合(0で無効)
+# 残像対策: 前のフレームの色を、今のフレームの周囲NxN画素の色の範囲に収める(1で無効)。
+# 小さいほど残像が消えるが、ちらつきを抑える効果は弱まる(3:-42%, 5:-52%, 7:-56%, 無効:-61%)
+BLEND_CLAMP = 5
 MAX_BLEND_FLOW = 64  # これより大きく動いたフレームは混ぜない(残像を防ぐ)
 FLOW_DEADZONE = 1.0  # 全画素の動きがこれ(px)未満なら静止とみなす(カメラのわずかな揺れを無視する)
+UNITY_TIMEOUT = 3.0  # Unityから映像がこの秒数届かなければ、終了する
+WINDOW_NAME = "AI Render View"
 DEBUG_MOTION = False  # 動きの計算が正しいか確認するための表示と画像保存(約9ms遅くなる)
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -34,6 +40,36 @@ sock.bind(('127.0.0.1', 5005))
 # Windowsでは、送信先(Unityの5006番)が閉じていると、送信したソケットの次の受信がエラーになる。
 # Unityを止めても受信が止まらないよう、送信は別のソケットで行う
 send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+
+def finish(reason):
+    """ウィンドウを閉じて終了する"""
+    print(f"終了します: {reason}")
+    cv2.destroyAllWindows()
+    sock.close()
+    send_sock.close()
+    sys.exit(0)
+
+
+def receive():
+    """Unityからの映像を待つ。待っている間もウィンドウの処理を続け、「応答なし」にならないようにする"""
+    global last_received
+    while True:
+        if select.select([sock], [], [], 0.05)[0]:
+            data, _ = sock.recvfrom(65536)
+            last_received = time.perf_counter()
+            return data
+        if window_shown:
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                finish("q キーが押されました")
+            if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
+                finish("ウィンドウが閉じられました")
+        if last_received is not None and time.perf_counter() - last_received > UNITY_TIMEOUT:
+            finish(f"Unityから{UNITY_TIMEOUT:.0f}秒間映像が届きません(再生が止まりました)")
+
+
+window_shown = False
+last_received = None
 
 wrapper = StreamDiffusionWrapper(
     model_id_or_path=MODEL_ID,
@@ -64,10 +100,11 @@ for _ in range(wrapper.batch_size):
     wrapper(image=Image.new("RGB", (SIZE, SIZE)))
 
 warper = NoiseWarper(wrapper.stream) if USE_NOISE_WARP else None
-blender = OutputBlender(BLEND_ALPHA) if BLEND_ALPHA > 0 else None
+blender = OutputBlender(BLEND_ALPHA, BLEND_CLAMP) if BLEND_ALPHA > 0 else None
 # AIの出力は (ステップ数-1) フレーム遅れるので、合成にはその時点のモーションベクトルを使う
 lag = len(T_INDEX_LIST) - 1
-flows = deque([None] * (lag + 1), maxlen=lag + 1)
+# (モーションベクトル, 前のフレームでも見えていた画素) の履歴
+flows = deque([(None, None)] * (lag + 1), maxlen=lag + 1)
 prev_meta = None
 flow_sum = 0.0
 cam_move_sum = 0.0
@@ -84,7 +121,7 @@ last_report = time.perf_counter()
 
 while True:
     t0 = time.perf_counter()
-    data, addr = sock.recvfrom(65536)
+    data = receive()
     t1 = time.perf_counter()
 
     # 溜まっている古いフレームを捨てて、最新の1枚だけを使う
@@ -101,8 +138,9 @@ while True:
 
     # 前に処理したフレームから今のフレームまでの動き
     flow = None
+    visible = None
     if meta is not None and prev_meta is not None:
-        flow = flow_from_depth(meta, prev_meta, SIZE)
+        flow, visible = flow_from_depth(meta, prev_meta, SIZE, return_visible=True)
         flow_mag = flow.abs().amax().item()
         if flow_mag < FLOW_DEADZONE:
             flow = torch.zeros_like(flow)
@@ -111,7 +149,7 @@ while True:
         cam_move_sum += cam_move
         cam_rot_sum += cam_rot
     prev_meta = meta
-    flows.append(flow)
+    flows.append((flow, visible))
     if warper:
         warper.update(flow)
 
@@ -137,10 +175,10 @@ while True:
 
     if blender:
         out_t = torch.from_numpy(np.asarray(output_pil).copy()).cuda().permute(2, 0, 1).float() / 255
-        blend_flow = flows[0]
+        blend_flow, blend_visible = flows[0]
         if blend_flow is None or blend_flow.abs().median() > MAX_BLEND_FLOW:
             blender.reset()  # 動きが分からない・大きすぎるときは混ぜない
-        out_t = blender(out_t, blend_flow)
+        out_t = blender(out_t, blend_flow, blend_visible)
         output_rgb = (out_t.clamp(0, 1) * 255).round().byte().permute(1, 2, 0).cpu().numpy()
     else:
         output_rgb = np.array(output_pil)
@@ -148,8 +186,10 @@ while True:
     t4 = time.perf_counter()
 
     #比較用に新規ウィンドウで表示する処理
-    cv2.imshow("AI Render View", output_bgr)
-    cv2.waitKey(1)
+    cv2.imshow(WINDOW_NAME, output_bgr)
+    window_shown = True
+    if cv2.waitKey(1) & 0xFF == ord("q"):
+        finish("q キーが押されました")
     t5 = time.perf_counter()
 
     # AIで変換した画像をJPEGにエンコード

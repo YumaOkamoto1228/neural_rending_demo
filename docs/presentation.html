@@ -118,7 +118,7 @@ footer { font-size: .84rem; color: var(--muted); border-top: 1px solid var(--lin
 <header>
   <div class="eyebrow">成果報告 / UNITY × ローカル画像生成AI</div>
   <h1>3Dの映像を、AIでリアルタイムに写実的な映像へ</h1>
-  <p class="lead">Unityで作ったシンプルな3Dの村を歩くと、その映像を手元のPCの画像生成AIが写実的に描き直し、Unityの画面に表示するシステムです。改善前は約3秒遅れて表示されていたものを、約0.2秒まで縮め、カメラを動かしたときのちらつきを約6割減らしました。</p>
+  <p class="lead">Unityで作ったシンプルな3Dの村を歩くと、その映像をローカルPCの画像生成AIが写実的に描き直し、Unityの画面に表示するシステムです。改善前は約3秒遅れて表示されていたものを、約0.2秒まで縮め、カメラを動かしたときのちらつきを約6割減らしました。</p>
   <div class="hero-figs">
     <div class="fig"><span class="k">操作から表示までの遅れ</span><span class="v">3秒<span class="arrow"> → </span><span class="to">0.2秒</span></span></div>
     <div class="fig"><span class="k">1秒あたりの描き直し枚数</span><span class="v"><span class="to">12.5</span><small> 枚</small></span></div>
@@ -154,14 +154,14 @@ footer { font-size: .84rem; color: var(--muted); border-top: 1px solid var(--lin
   <div class="eyebrow">1 / 経緯と狙い</div>
   <h2>世界の形は3Dモデルで、見た目はAIで</h2>
   <div class="prose">
-    <p>Google DeepMindの「Genie 3」のように、AIが映像そのものを生成して操作できる世界を作る技術が出てきています。ただ、AIが世界をゼロから生成し続けると、時間がたつにつれて建物の形や配置が崩れる(世界が破綻する)ことがあります。</p>
-    <p>そこで、<strong>世界の形はあらかじめ3Dモデルで作っておき、AIには見た目の加工だけを任せる</strong>方法を考えました。</p>
+    <p>Google DeepMindの「Genie 3」は、AIが世界そのものを生成し、その中を自由に動き回れる技術です。ただし、1分以上その世界にいると地形や配置が崩れ、来た道を戻っても異なる世界になってしまう(世界が破綻する)という問題があります。</p>
+    <p>目的は根本的に異なりますが、<strong>世界の形はあらかじめ3Dモデルで作っておき、AIには見た目の加工だけを任せる</strong>方法を考えました。</p>
     <ul>
-      <li>建物の配置や形は3Dモデルが決めるので、世界が破綻しない</li>
-      <li>細かな質感はAIが描き足すので、作り込みの少ない(容量の小さい)3Dモデルでも写実的な映像になる</li>
-      <li>ローカルのAIで動かすので、利用料などのコストがかからない</li>
+      <li><strong>世界が破綻しない</strong>: 建物の配置や形は3Dモデルが決める</li>
+      <li><strong>高品質でも容量が小さい</strong>: 作り込みの少ない3Dモデルでも、質感はAIが描き足す</li>
+      <li><strong>低コスト</strong>: 近年のAAAゲームなどで問題になっている、容量や制作費の削減につながる</li>
     </ul>
-    <p>これを、<strong>手元のPCで、操作できる速さで動かす</strong>ことを目標にしました。</p>
+    <p>これを、<strong>ローカルPCで、操作できる速さで動かす</strong>ことを目標にしました。</p>
   </div>
 </section>
 
@@ -211,7 +211,7 @@ flowchart LR
       <thead><tr><th>課題</th><th>調べて分かった原因</th></tr></thead>
       <tbody>
         <tr><td>約3秒の遅れ</td><td>Pythonの環境で複数のバージョンのライブラリが混ざって壊れていた。動いていたPyTorch(AIの計算ライブラリ)はRTX 5070に対応していなかった。TensorRTも、必要なライブラリが入っておらず、RTX 50シリーズに対応していない古いバージョンだったため、エラーを出さずに<strong>高速化なしで動いていた</strong></td></tr>
-        <tr><td>画質が低い</td><td>汎用のAIモデルを使っていた。AIへの指示文が「オレンジのレンガの家、黒い屋根」で、実際の村(白い壁、わらぶき屋根)と食い違っていた</td></tr>
+        <tr><td>画質が低い</td><td>変化を分かりやすくしようと、汎用のAIモデルへの指示文(レンガの家、黒い屋根)を実際の村(白い壁、わらぶき屋根)と異なるものにしていたことが裏目に出て、品質が落ちていた</td></tr>
         <tr><td>カメラを動かすと模様がちらつく</td><td>AIは毎フレームを独立した1枚として描き直すため、前に描いた模様を覚えていない。AIに与えるノイズが画面に固定されていて、カメラが動くと模様が建物の上を滑る</td></tr>
       </tbody>
     </table>
@@ -350,9 +350,11 @@ flowchart LR
   </div>
   <p class="muted" style="font-size:.9rem">ちらつきの数値は、カメラの横移動を再現した60フレームで測定(512×512、1フレーム4px移動)。色の差は0〜255の平均。</p>
 
+  <h3>理想的な環境でのテスト</h3>
+  <p class="muted">一定の速さでカメラを横に動かしたときのAIの出力。画像を平行移動させただけの理想的な条件なので、実際のUnityの映像ではここまでの効果は出ない。</p>
   <div class="pair">
-    <figure><img src="flicker_before.gif" alt="対策なしでカメラを横に動かしたときのAIの出力"><figcaption>対策なし: 模様がフレームごとに描き直される</figcaption></figure>
-    <figure><img src="flicker_after.gif" alt="対策ありでカメラを横に動かしたときのAIの出力"><figcaption>対策あり: 模様が景色に付いて動く</figcaption></figure>
+    <figure><img src="flicker_before.gif" alt="対策なしでカメラを横に動かしたときのAIの出力"><figcaption>対策なし: 模様が毎回描き直される</figcaption></figure>
+    <figure><img src="flicker_after.gif" alt="対策ありでカメラを横に動かしたときのAIの出力"><figcaption>対策あり: 模様の大半が景色に付いたまま動く</figcaption></figure>
   </div>
 </section>
 
@@ -360,9 +362,9 @@ flowchart LR
   <div class="eyebrow">7 / 限界</div>
   <h2>仕組み上の限界</h2>
   <div class="note">
-    <p><strong>カメラを動かすと、建物の細かな見た目は少しずつ変わります。</strong></p>
-    <p>このシステムは、毎フレームの映像を1枚の画像としてAIに描き直させています。AIは前のフレームで何を描いたかを覚えていないため、カメラが動いて入力が少し変わると、壁の模様などの細部が描き直されます。対策で変化の量は約6割減らしましたが、1枚ずつ描き直す仕組みである以上、完全になくすことはできません。</p>
-    <p>根本的に解決するには、AIが描いた結果を3Dモデルの表面(テクスチャ)に焼き付けてUnityで描画するなど、仕組み自体を変える必要があります。</p>
+    <p><strong>細部の変化は、今回の仕組みでは修正できません。</strong></p>
+    <p>AIは毎フレームを1枚ずつ描き直すため、カメラを動かすと細部の見た目は少しずつ変わります。対策で約6割減らしましたが、完全にはなくせません。</p>
+    <p>今後は、AIが描いた結果を3Dモデルの表面(テクスチャ)に記憶させるなど、仕組みそのものを変えて解決したいと考えています。同じ場所がいつも同じ見た目になります。</p>
   </div>
 </section>
 
@@ -376,15 +378,21 @@ flowchart LR
 </section>
 
 <section>
-  <h2>使った技術</h2>
+  <h2>使用したツール</h2>
   <div class="table-wrap">
     <table>
       <tbody>
-        <tr><th>3D環境</th><td>Unity 6.3、URP 17.3(深度を取り出す処理を自作)</td></tr>
-        <tr><th>AI</th><td>StreamDiffusion、Realistic Vision V5.1(Stable Diffusion 1.5系)、LCM-LoRA、TinyVAE</td></tr>
-        <tr><th>高速化</th><td>TensorRT 10.16(RTX 50シリーズ対応に修正)、PyTorch 2.11 + CUDA 12.8</td></tr>
-        <tr><th>通信</th><td>UDP(映像JPEG + 深度 + カメラの位置と向き)</td></tr>
-        <tr><th>開発環境</th><td>Windows 11、RTX 5070(VRAM 12GB)、Core i5-12400、メモリ32GB</td></tr>
+        <tr><th>3D・描画</th><td>Unity 6.3 (6000.3.7f1)、Universal Render Pipeline 17.3</td></tr>
+        <tr><th>3D素材</th><td>Stylized Medieval Thatched Roof House (Davidweber01)</td></tr>
+        <tr><th>言語</th><td>C# (Unity側)、Python 3.10 (AI側)</td></tr>
+        <tr><th>画像生成AI</th><td>StreamDiffusion、Realistic Vision V5.1 (Stable Diffusion 1.5系)、LCM-LoRA、TinyVAE</td></tr>
+        <tr><th>比較したモデル</th><td>Stable Diffusion 1.5、DreamShaper 8</td></tr>
+        <tr><th>AIライブラリ</th><td>PyTorch 2.11 (CUDA 12.8)、diffusers 0.24、transformers 4.40、Hugging Face Hub</td></tr>
+        <tr><th>高速化</th><td>TensorRT 10.16、ONNX、ONNX Runtime、Polygraphy、cuda-python</td></tr>
+        <tr><th>画像処理・数値計算</th><td>OpenCV 4.10、NumPy 1.26、Pillow</td></tr>
+        <tr><th>通信</th><td>UDP (Pythonのsocket、.NETのUdpClient)</td></tr>
+        <tr><th>開発支援</th><td>Git / GitHub、Claude Code、Gemini</td></tr>
+        <tr><th>実行環境</th><td>Windows 11、RTX 5070 (VRAM 12GB)、Core i5-12400、メモリ32GB</td></tr>
       </tbody>
     </table>
   </div>

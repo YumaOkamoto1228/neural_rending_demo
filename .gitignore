@@ -77,3 +77,6 @@ tools/flicker_out*/
 # receiver.py の動き確認用
 debug_depth.png
 debug_input.png
+
+# 動画(容量が大きいためアップロードしない)
+*.mp4

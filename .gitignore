@@ -80,3 +80,6 @@ debug_input.png
 
 # 動画(容量が大きいためアップロードしない)
 *.mp4
+
+# 説明資料(HTML)はローカルのみで管理する
+docs/presentation.html
